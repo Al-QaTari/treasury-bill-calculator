@@ -1,1 +1,1 @@
-fribidi
+libfribidi-dev

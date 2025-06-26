@@ -222,7 +222,7 @@ with top_col1:
             tenor_icons = {91: "⏳", 182: "🗓️", 273: "📆", 364: "🗓️✨"}
             for i, tenor in enumerate(sorted_tenors):
                 with cols[i]:
-                    icon = tenor_icons.get(tenor, "�")
+                    icon = tenor_icons.get(tenor, "🪙")
                     rate = data_df[data_df[TENOR_COLUMN_NAME] == tenor][YIELD_COLUMN_NAME].iloc[0]
                     st.metric(label=prepare_arabic_text(f"{icon} أجل {tenor} يوم"), value=f"{rate:.3f}%")
         else:
@@ -283,6 +283,23 @@ if calculate_button_main:
                 st.markdown('<hr style="border-color: #495057;">', unsafe_allow_html=True)
                 st.markdown(f'<table style="width:100%; font-size: 1.0rem;"><tr><td style="padding-bottom: 8px;">{prepare_arabic_text("💰 المبلغ المستثمر")}</td><td style="text-align:left;">{investment_amount_main:,.2f} {prepare_arabic_text("جنيه")}</td></tr><tr><td style="padding-bottom: 8px; color: #8ab4f8;">{prepare_arabic_text("📈 العائد الإجمالي")}</td><td style="text-align:left; color: #8ab4f8;">{gross_return:,.2f} {prepare_arabic_text("جنيه")}</td></tr><tr><td style="padding-bottom: 15px; color: #f28b82;">{prepare_arabic_text("💸 ضريبة الأرباح (20%)")}</td><td style="text-align:left; color: #f28b82;">- {tax_amount:,.2f} {prepare_arabic_text("جنيه")}</td></tr></table>', unsafe_allow_html=True)
                 st.markdown(f'<div style="background-color: #495057; padding: 10px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center;"><span style="font-size: 1.1rem;">{prepare_arabic_text("🏦 إجمالي المستلم")}</span><span style="font-size: 1.2rem;">{total_payout:,.2f} {prepare_arabic_text("جنيه")}</span></div>', unsafe_allow_html=True)
+                
+                # --- Comparison Section Restored ---
+                st.markdown('<hr style="border-color: #495057;">', unsafe_allow_html=True)
+                st.subheader(prepare_arabic_text("📈 مقارنة سريعة"), anchor=False)
+                
+                other_tenors = [t for t in sorted(data_df[TENOR_COLUMN_NAME].unique()) if t != selected_tenor_main]
+                cols = st.columns(len(other_tenors))
+
+                for i, tenor in enumerate(other_tenors):
+                    with cols[i]:
+                        comp_yield_rate_row = data_df[data_df[TENOR_COLUMN_NAME] == tenor]
+                        comp_yield_rate = comp_yield_rate_row[YIELD_COLUMN_NAME].iloc[0]
+                        comp_annual_yield_decimal = comp_yield_rate / 100.0
+                        comp_gross_return = investment_amount_main * (comp_annual_yield_decimal / 365.0) * tenor
+                        comp_net_return = comp_gross_return * 0.80
+                        st.metric(label=prepare_arabic_text(f"صافي ربح {tenor} يوم"), value=f"{comp_net_return:,.2f}")
+
 else:
     with results_placeholder_main.container(border=True):
         st.info(prepare_arabic_text("✨ نتائج العائد الأساسي ستظهر هنا بعد ملء النموذج والضغط على زر الحساب."))

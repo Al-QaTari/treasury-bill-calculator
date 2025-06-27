@@ -241,16 +241,22 @@ with top_col2:
         st.write(f"{prepare_arabic_text('**التوقيت المحلي (القاهرة):**')} {prepare_arabic_text(day_name_ar)}، {current_time_str}")
         st.write(f"{prepare_arabic_text('**آخر تحديث مسجل:**')} {st.session_state.last_update}")
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button(prepare_arabic_text("🔄 جلب أحدث البيانات الآن"), use_container_width=True, type="primary"):
-            with st.spinner(prepare_arabic_text("جاري الاتصال بالبنك المركزي...")):
-                new_df, status, message, update_time = fetch_data_from_cbe()
-                if status == 'SUCCESS':
-                    st.session_state.df_data = new_df; st.session_state.last_update = datetime.now(cairo_tz).strftime("%d-%m-%Y %H:%M")
-                    st.success(prepare_arabic_text("✅ تم التحديث بنجاح!"), icon="✅"); time.sleep(2); st.rerun()
-                elif status == 'NO_DATA_FOUND':
-                    st.info(prepare_arabic_text("ℹ️ لا توجد نتائج جديدة."), icon="ℹ️"); time.sleep(3)
-                else:
-                    st.error(prepare_arabic_text(f"⚠️ {message}"), icon="⚠️"); time.sleep(4)
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button(prepare_arabic_text("🔄 جلب أحدث البيانات"), use_container_width=True, type="primary"):
+                with st.spinner(prepare_arabic_text("جاري الاتصال بالبنك المركزي...")):
+                    new_df, status, message, update_time = fetch_data_from_cbe()
+                    if status == 'SUCCESS':
+                        st.session_state.df_data = new_df; st.session_state.last_update = datetime.now(cairo_tz).strftime("%d-%m-%Y %H:%M")
+                        st.success(prepare_arabic_text("✅ تم التحديث بنجاح!"), icon="✅"); time.sleep(2); st.rerun()
+                    elif status == 'NO_DATA_FOUND':
+                        st.info(prepare_arabic_text("ℹ️ لا توجد نتائج جديدة."), icon="ℹ️"); time.sleep(3)
+                    else:
+                        st.error(prepare_arabic_text(f"⚠️ {message}"), icon="⚠️"); time.sleep(4)
+        with c2:
+            st.link_button(prepare_arabic_text("🔗 فتح موقع البنك"), CBE_DATA_URL, use_container_width=True)
+
+
 st.divider()
 
 # --- Main Calculator Section ---
@@ -284,7 +290,7 @@ if calculate_button_main:
                 st.markdown('<hr style="border-color: #495057;">', unsafe_allow_html=True)
                 st.markdown(f'<table style="width:100%; font-size: 1.0rem;"><tr><td style="padding-bottom: 8px;">{prepare_arabic_text("💰 المبلغ المستثمر")}</td><td style="text-align:left;">{investment_amount_main:,.2f} {prepare_arabic_text("جنيه")}</td></tr><tr><td style="padding-bottom: 8px; color: #8ab4f8;">{prepare_arabic_text("📈 العائد الإجمالي")}</td><td style="text-align:left; color: #8ab4f8;">{gross_return:,.2f} {prepare_arabic_text("جنيه")}</td></tr><tr><td style="padding-bottom: 15px; color: #f28b82;">{prepare_arabic_text("💸 ضريبة الأرباح (20%)")}</td><td style="text-align:left; color: #f28b82;">- {tax_amount:,.2f} {prepare_arabic_text("جنيه")}</td></tr></table>', unsafe_allow_html=True)
                 st.markdown(f'<div style="background-color: #495057; padding: 10px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center;"><span style="font-size: 1.1rem;">{prepare_arabic_text("🏦 إجمالي المستلم")}</span><span style="font-size: 1.2rem;">{total_payout:,.2f} {prepare_arabic_text("جنيه")}</span></div>', unsafe_allow_html=True)
-
+                
                 # --- Comparison Section Restored ---
                 st.markdown('<hr style="border-color: #495057;">', unsafe_allow_html=True)
                 st.markdown(f"<h6 style='text-align:center; color:#dee2e6;'>{prepare_arabic_text('مقارنة سريعة مع الآجال الأخرى')}</h6>", unsafe_allow_html=True)
@@ -401,45 +407,39 @@ if calc_secondary_sale_button:
 
 else:
     with secondary_results_placeholder.container(border=True):
-        st.info(prepare_arabic_text("✨ أدخل بيانات البيع في النموذج على اليسار لتحليل قرارك."))
+        st.info(prepare_arabic_text("✨ أدخل بيانات البيع في النموذج لتحليل قرارك."))
 
-# --- NEW: Reverse Goal Calculator ---
+# --- NEW: Help Section ---
 st.divider()
-st.header(prepare_arabic_text("🎯 حاسبة الهدف المالي (التخطيط العكسي)"))
-col_form_goal, col_results_goal = st.columns(2, gap="large")
+with st.expander(prepare_arabic_text("💡 شرح ومساعدة (أسئلة شائعة)")):
+    st.markdown(prepare_arabic_text("""
+    #### **ما الفرق بين "العائد" و "الفائدة"؟**
+    - **الفائدة (Interest):** تُحسب على أصل المبلغ وتُضاف إليه دورياً (مثل شهادات الادخار).
+    - **العائد (Yield):** في أذون الخزانة، أنت تشتري الإذن بسعر **أقل** من قيمته الإسمية (مثلاً تشتريه بـ 975 وهو يساوي 1000)، وربحك هو الفارق الذي ستحصل عليه في نهاية المدة. الحاسبة تحول هذا الفارق إلى نسبة مئوية سنوية لتسهيل المقارنة.
 
-with col_form_goal:
-    with st.container(border=True):
-        st.subheader(prepare_arabic_text("1. حدد هدفك المالي"), anchor=False)
-        target_amount = st.number_input(prepare_arabic_text("المبلغ النهائي المستهدف (بالجنيه)"), min_value=1000.0, value=50000.0, step=1000.0, key="goal_target")
-        selected_tenor_goal = st.selectbox(prepare_arabic_text("اختر مدة الاستثمار (بالأيام)"), options=data_df[TENOR_COLUMN_NAME].unique(), key="goal_tenor")
-        st.subheader(prepare_arabic_text("2. احسب المبلغ المطلوب استثماره"), anchor=False)
-        calculate_button_goal = st.button(prepare_arabic_text("احسب المبلغ المطلوب"), use_container_width=True, type="primary", key="goal_calc")
+    ---
+    
+    #### **كيف تعمل حاسبة العائد الأساسية؟**
+    هذه الحاسبة تجيب على سؤال: "كم سأربح إذا احتفظت بالإذن حتى نهاية مدته؟".
+    1.  **حساب إجمالي الربح:** `المبلغ المستثمر × (العائد ÷ 100) × (مدة الإذن ÷ 365)`
+    2.  **حساب الضريبة:** `إجمالي الربح × 0.20`
+    3.  **حساب صافي الربح:** `إجمالي الربح - قيمة الضريبة`
+    4.  **إجمالي المستلم:** `المبلغ المستثمر + صافي الربح`
 
-results_placeholder_goal = col_results_goal.empty()
+    ---
 
-if calculate_button_goal:
-    if not data_df.empty:
-        yield_rate_row = data_df[data_df[TENOR_COLUMN_NAME] == selected_tenor_goal]
-        if not yield_rate_row.empty:
-            yield_rate = yield_rate_row[YIELD_COLUMN_NAME].iloc[0]
-            
-            # Reverse calculation logic
-            yield_decimal_net = (yield_rate / 100) * 0.8 # Net yield after 20% tax
-            required_principal = target_amount / (1 + (yield_decimal_net * selected_tenor_goal / 365))
-            net_profit_goal = target_amount - required_principal
-            gross_profit_goal = net_profit_goal / 0.8
-            tax_amount_goal = gross_profit_goal * 0.2
-            
-            with results_placeholder_goal.container(border=True):
-                st.subheader(prepare_arabic_text("💰 المبلغ المطلوب استثماره اليوم"), anchor=False)
-                st.markdown(f'<p style="font-size: 2.0rem; color: #8ab4f8; font-weight: 700; text-align:center;">{required_principal:,.2f} {prepare_arabic_text("جنيه")}</p>', unsafe_allow_html=True)
-                st.markdown(f'<p style="text-align:center; color: #adb5bd;">{prepare_arabic_text("لتحقيق هدفك النهائي وهو")} {target_amount:,.2f} {prepare_arabic_text("جنيه")}</p>', unsafe_allow_html=True)
-                st.markdown('<hr style="border-color: #495057;">', unsafe_allow_html=True)
-                st.metric(label=prepare_arabic_text("صافي الربح المتوقع"), value=f"{net_profit_goal:,.2f} جنيه")
-                st.metric(label=prepare_arabic_text("إجمالي الضريبة المستقطعة"), value=f"{tax_amount_goal:,.2f} جنيه")
+    #### **كيف تعمل حاسبة البيع في السوق الثانوي؟**
+    هذه الحاسبة تجيب على سؤال: "كم سيكون ربحي أو خسارتي إذا بعت الإذن اليوم قبل تاريخ استحقاقه؟". سعر البيع هنا لا يعتمد على سعر شرائك، بل على سعر الفائدة **الحالي** في السوق.
+    1.  **حساب سعر شرائك الأصلي:** أولاً، نحسب المبلغ الذي دفعته فعلياً عند الشراء.
+        - `سعر الشراء = القيمة الإسمية ÷ (1 + (عائد الشراء ÷ 100) × (الأجل الأصلي ÷ 365))`
+    2.  **حساب سعر البيع اليوم:** نحسب السعر الذي سيشتريه به شخص آخر اليوم بناءً على الفائدة الحالية.
+        - `الأيام المتبقية = الأجل الأصلي - أيام الاحتفاظ`
+        - `سعر البيع = القيمة الإسمية ÷ (1 + (العائد السائد ÷ 100) × (الأيام المتبقية ÷ 365))`
+    3.  **النتيجة النهائية:**
+        - `الربح أو الخسارة = سعر البيع - سعر الشراء الأصلي`
+        - يتم حساب الضريبة (20%) على هذا الربح إذا كان موجباً.
 
-else:
-    with results_placeholder_goal.container(border=True):
-        st.info(prepare_arabic_text("✨ أدخل هدفك المالي في النموذج لمعرفة المبلغ المطلوب استثماره."))
+    ---
+    ***إخلاء مسؤولية:*** *هذا التطبيق هو أداة استرشادية فقط، والأرقام الناتجة هي تقديرات. للحصول على أرقام نهائية ودقيقة، يرجى الرجوع إلى البنك أو المؤسسة المالية التي تتعامل معها.*
+    """))
 

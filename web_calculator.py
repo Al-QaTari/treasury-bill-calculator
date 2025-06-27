@@ -441,5 +441,5 @@ if calculate_button_goal:
 
 else:
     with results_placeholder_goal.container(border=True):
-        st.info(prepare_arabic_text("✨ أدخل هدفك المالي في النموذج على اليسار لمعرفة المبلغ المطلوب استثماره."))
+        st.info(prepare_arabic_text("✨ أدخل هدفك المالي في النموذج لمعرفة المبلغ المطلوب استثماره."))
 

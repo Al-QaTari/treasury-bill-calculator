@@ -11,12 +11,12 @@ import re
 import arabic_reshaper
 from bidi.algorithm import get_display
 import traceback
+import pytz
 
 # --- 2. Define Constants and Helper Functions ---
 YIELD_COLUMN_NAME = "متوسط العائد المرجح المقبول (%)"
 TENOR_COLUMN_NAME = "المدة (الأيام)"
 CSV_FILENAME = "cbe_tbill_rates_processed.csv"
-
 CBE_DATA_URL = "https://www.cbe.org.eg/ar/auctions/egp-t-bills"
 
 # بيانات أولية في حالة عدم توفر ملف أو فشل الاتصال
@@ -191,7 +191,7 @@ st.markdown("""
 st.markdown(f"""
 <div class="app-title">
     <h1>{prepare_arabic_text("🏦 حاسبة أذون الخزانة")}</h1>
-    <p>{prepare_arabic_text("تطبيق تفاعلي لحساب عوائد أذون الخزانة بناءً على أحدث نتائج العطاءات")}</p>
+    <p>{prepare_arabic_text("تطبيق تفاعلي لحساب وتحليل عوائد أذون الخزانة")}</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -231,20 +231,21 @@ with top_col1:
 with top_col2:
     with st.container(border=True):
         st.subheader(prepare_arabic_text("📡 حالة الاتصال بالبنك المركزي"), anchor=False)
+        cairo_tz = pytz.timezone('Africa/Cairo')
+        now_cairo = datetime.now(cairo_tz)
         days_ar = {'Monday':'الإثنين','Tuesday':'الثلاثاء','Wednesday':'الأربعاء','Thursday':'الخميس','Friday':'الجمعة','Saturday':'السبت','Sunday':'الأحد'}
-        now = datetime.now()
-        day_name_en = now.strftime('%A')
+        day_name_en = now_cairo.strftime('%A')
         day_name_ar = days_ar.get(day_name_en, day_name_en)
-        current_time_str = now.strftime(f"%Y/%m/%d | %H:%M")
+        current_time_str = now_cairo.strftime(f"%Y/%m/%d | %H:%M")
         
-        st.write(f"{prepare_arabic_text('**الوقت الحالي:**')} {prepare_arabic_text(day_name_ar)}، {current_time_str}")
+        st.write(f"{prepare_arabic_text('**التوقيت المحلي (القاهرة):**')} {prepare_arabic_text(day_name_ar)}، {current_time_str}")
         st.write(f"{prepare_arabic_text('**آخر تحديث مسجل:**')} {st.session_state.last_update}")
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button(prepare_arabic_text("🔄 جلب أحدث البيانات الآن"), use_container_width=True, type="primary"):
             with st.spinner(prepare_arabic_text("جاري الاتصال بالبنك المركزي...")):
                 new_df, status, message, update_time = fetch_data_from_cbe()
                 if status == 'SUCCESS':
-                    st.session_state.df_data = new_df; st.session_state.last_update = datetime.now().strftime("%d-%m-%Y %H:%M")
+                    st.session_state.df_data = new_df; st.session_state.last_update = datetime.now(cairo_tz).strftime("%d-%m-%Y %H:%M")
                     st.success(prepare_arabic_text("✅ تم التحديث بنجاح!"), icon="✅"); time.sleep(2); st.rerun()
                 elif status == 'NO_DATA_FOUND':
                     st.info(prepare_arabic_text("ℹ️ لا توجد نتائج جديدة."), icon="ℹ️"); time.sleep(3)
@@ -259,7 +260,7 @@ col_form_main, col_results_main = st.columns(2, gap="large")
 with col_form_main:
     with st.container(border=True):
         st.subheader(prepare_arabic_text("1. أدخل بيانات الاستثمار"), anchor=False)
-        investment_amount_main = st.number_input(prepare_arabic_text("المبلغ المستثمر (بالجنيه)"), min_value=1000.0, value=25000.0, step=1000.0, key="main_investment")
+        investment_amount_main = st.number_input(prepare_arabic_text("المبلغ المستثمر (بالجنيه)"), min_value=1000.0, value=100000.0, step=1000.0, key="main_investment")
         selected_tenor_main = st.selectbox(prepare_arabic_text("اختر مدة الاستحقاق (بالأيام)"), options=data_df[TENOR_COLUMN_NAME].unique(), key="main_tenor")
         st.subheader(prepare_arabic_text("2. قم بحساب العائد"), anchor=False)
         calculate_button_main = st.button(prepare_arabic_text("احسب العائد الآن"), use_container_width=True, type="primary", key="main_calc")
@@ -283,23 +284,22 @@ if calculate_button_main:
                 st.markdown('<hr style="border-color: #495057;">', unsafe_allow_html=True)
                 st.markdown(f'<table style="width:100%; font-size: 1.0rem;"><tr><td style="padding-bottom: 8px;">{prepare_arabic_text("💰 المبلغ المستثمر")}</td><td style="text-align:left;">{investment_amount_main:,.2f} {prepare_arabic_text("جنيه")}</td></tr><tr><td style="padding-bottom: 8px; color: #8ab4f8;">{prepare_arabic_text("📈 العائد الإجمالي")}</td><td style="text-align:left; color: #8ab4f8;">{gross_return:,.2f} {prepare_arabic_text("جنيه")}</td></tr><tr><td style="padding-bottom: 15px; color: #f28b82;">{prepare_arabic_text("💸 ضريبة الأرباح (20%)")}</td><td style="text-align:left; color: #f28b82;">- {tax_amount:,.2f} {prepare_arabic_text("جنيه")}</td></tr></table>', unsafe_allow_html=True)
                 st.markdown(f'<div style="background-color: #495057; padding: 10px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center;"><span style="font-size: 1.1rem;">{prepare_arabic_text("🏦 إجمالي المستلم")}</span><span style="font-size: 1.2rem;">{total_payout:,.2f} {prepare_arabic_text("جنيه")}</span></div>', unsafe_allow_html=True)
-                
+
                 # --- Comparison Section Restored ---
                 st.markdown('<hr style="border-color: #495057;">', unsafe_allow_html=True)
-                st.subheader(prepare_arabic_text("📈 مقارنة سريعة"), anchor=False)
+                st.markdown(f"<h6 style='text-align:center; color:#dee2e6;'>{prepare_arabic_text('مقارنة سريعة مع الآجال الأخرى')}</h6>", unsafe_allow_html=True)
                 
                 other_tenors = [t for t in sorted(data_df[TENOR_COLUMN_NAME].unique()) if t != selected_tenor_main]
-                cols = st.columns(len(other_tenors))
-
-                for i, tenor in enumerate(other_tenors):
-                    with cols[i]:
-                        comp_yield_rate_row = data_df[data_df[TENOR_COLUMN_NAME] == tenor]
-                        comp_yield_rate = comp_yield_rate_row[YIELD_COLUMN_NAME].iloc[0]
-                        comp_annual_yield_decimal = comp_yield_rate / 100.0
-                        comp_gross_return = investment_amount_main * (comp_annual_yield_decimal / 365.0) * tenor
-                        comp_net_return = comp_gross_return * 0.80
-                        st.metric(label=prepare_arabic_text(f"صافي ربح {tenor} يوم"), value=f"{comp_net_return:,.2f}")
-
+                if other_tenors:
+                    cols = st.columns(len(other_tenors))
+                    for i, tenor in enumerate(other_tenors):
+                        with cols[i]:
+                            comp_yield_rate_row = data_df[data_df[TENOR_COLUMN_NAME] == tenor]
+                            comp_yield_rate = comp_yield_rate_row[YIELD_COLUMN_NAME].iloc[0]
+                            comp_annual_yield_decimal = comp_yield_rate / 100.0
+                            comp_gross_return = investment_amount_main * (comp_annual_yield_decimal / 365.0) * tenor
+                            comp_net_return = comp_gross_return * 0.80
+                            st.metric(label=prepare_arabic_text(f"صافي ربح {tenor} يوم"), value=f"{comp_net_return:,.2f}")
 else:
     with results_placeholder_main.container(border=True):
         st.info(prepare_arabic_text("✨ نتائج العائد الأساسي ستظهر هنا بعد ملء النموذج والضغط على زر الحساب."))
@@ -401,5 +401,45 @@ if calc_secondary_sale_button:
 
 else:
     with secondary_results_placeholder.container(border=True):
-        st.info(prepare_arabic_text("✨ أدخل بيانات البيع في النموذج على اليمين لتحليل قرارك."))
+        st.info(prepare_arabic_text("✨ أدخل بيانات البيع في النموذج على اليسار لتحليل قرارك."))
+
+# --- NEW: Reverse Goal Calculator ---
+st.divider()
+st.header(prepare_arabic_text("🎯 حاسبة الهدف المالي (التخطيط العكسي)"))
+col_form_goal, col_results_goal = st.columns(2, gap="large")
+
+with col_form_goal:
+    with st.container(border=True):
+        st.subheader(prepare_arabic_text("1. حدد هدفك المالي"), anchor=False)
+        target_amount = st.number_input(prepare_arabic_text("المبلغ النهائي المستهدف (بالجنيه)"), min_value=1000.0, value=50000.0, step=1000.0, key="goal_target")
+        selected_tenor_goal = st.selectbox(prepare_arabic_text("اختر مدة الاستثمار (بالأيام)"), options=data_df[TENOR_COLUMN_NAME].unique(), key="goal_tenor")
+        st.subheader(prepare_arabic_text("2. احسب المبلغ المطلوب استثماره"), anchor=False)
+        calculate_button_goal = st.button(prepare_arabic_text("احسب المبلغ المطلوب"), use_container_width=True, type="primary", key="goal_calc")
+
+results_placeholder_goal = col_results_goal.empty()
+
+if calculate_button_goal:
+    if not data_df.empty:
+        yield_rate_row = data_df[data_df[TENOR_COLUMN_NAME] == selected_tenor_goal]
+        if not yield_rate_row.empty:
+            yield_rate = yield_rate_row[YIELD_COLUMN_NAME].iloc[0]
+            
+            # Reverse calculation logic
+            yield_decimal_net = (yield_rate / 100) * 0.8 # Net yield after 20% tax
+            required_principal = target_amount / (1 + (yield_decimal_net * selected_tenor_goal / 365))
+            net_profit_goal = target_amount - required_principal
+            gross_profit_goal = net_profit_goal / 0.8
+            tax_amount_goal = gross_profit_goal * 0.2
+            
+            with results_placeholder_goal.container(border=True):
+                st.subheader(prepare_arabic_text("💰 المبلغ المطلوب استثماره اليوم"), anchor=False)
+                st.markdown(f'<p style="font-size: 2.0rem; color: #8ab4f8; font-weight: 700; text-align:center;">{required_principal:,.2f} {prepare_arabic_text("جنيه")}</p>', unsafe_allow_html=True)
+                st.markdown(f'<p style="text-align:center; color: #adb5bd;">{prepare_arabic_text("لتحقيق هدفك النهائي وهو")} {target_amount:,.2f} {prepare_arabic_text("جنيه")}</p>', unsafe_allow_html=True)
+                st.markdown('<hr style="border-color: #495057;">', unsafe_allow_html=True)
+                st.metric(label=prepare_arabic_text("صافي الربح المتوقع"), value=f"{net_profit_goal:,.2f} جنيه")
+                st.metric(label=prepare_arabic_text("إجمالي الضريبة المستقطعة"), value=f"{tax_amount_goal:,.2f} جنيه")
+
+else:
+    with results_placeholder_goal.container(border=True):
+        st.info(prepare_arabic_text("✨ أدخل هدفك المالي في النموذج على اليسار لمعرفة المبلغ المطلوب استثماره."))
 

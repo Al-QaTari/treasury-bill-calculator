@@ -45,12 +45,10 @@ def prepare_arabic_text(text):
     except Exception:
         return str(text)
 
-# --- FINAL AUTOMATED FUNCTION v12: Surgical Scraping with User's XPaths ---
+# --- FINAL AUTOMATED FUNCTION v13: REMOVED HARDCODED PATH ---
 def fetch_data_from_cbe():
     """
-    Fetches T-Bill auction results using Selenium with a surgical approach,
-    extracting headers from one table and data from another using the exact
-    XPaths provided by the user.
+    Fetches T-Bill auction results using Selenium, allowing Streamlit to manage the webdriver.
     """
     print("INFO: Initializing Selenium WebDriver...")
     options = Options()
@@ -58,16 +56,12 @@ def fetch_data_from_cbe():
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     
-    gecko_path = '/home/qatari/.cache/selenium/geckodriver/linux64/0.36.0/geckodriver'
-    
-    if not os.access(gecko_path, os.X_OK):
-        msg = f"Geckodriver is not executable at {gecko_path}. Please run 'sudo chmod +x {gecko_path}' in your terminal."
-        return None, 'PERMISSION_ERROR', msg, None
-
-    service = Service(executable_path=gecko_path)
     driver = None
     try:
-        driver = webdriver.Firefox(service=service, options=options)
+        # Let Streamlit handle the driver setup automatically
+        # No need for hardcoded paths or Service object
+        driver = webdriver.Firefox(options=options)
+        
         print(f"INFO: Navigating to {CBE_DATA_URL}")
         driver.get(CBE_DATA_URL)
 

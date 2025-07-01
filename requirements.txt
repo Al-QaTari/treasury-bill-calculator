@@ -4,5 +4,5 @@ requests
 beautifulsoup4
 arabic_reshaper
 python-bidi
-lxml
 pytz
+selenium

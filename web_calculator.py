@@ -12,17 +12,25 @@ import arabic_reshaper
 from bidi.algorithm import get_display
 import traceback
 import pytz
+# --- Import Selenium for advanced web scraping ---
+from selenium import webdriver
+from selenium.webdriver.firefox.options import Options
+from selenium.webdriver.firefox.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
 
 # --- 2. Define Constants and Helper Functions ---
-YIELD_COLUMN_NAME = "متوسط العائد المرجح المقبول (%)"
+YIELD_COLUMN_NAME = "العائد (%)"
 TENOR_COLUMN_NAME = "المدة (الأيام)"
 CSV_FILENAME = "cbe_tbill_rates_processed.csv"
 CBE_DATA_URL = "https://www.cbe.org.eg/ar/auctions/egp-t-bills"
 
-# بيانات أولية في حالة عدم توفر ملف أو فشل الاتصال
+# بيانات أولية في حالة عدم توفر ملف
 INITIAL_DATA = {
     TENOR_COLUMN_NAME: [91, 182, 273, 364],
-    YIELD_COLUMN_NAME: [29.108, 28.274, 27.184, 25.230]
+    YIELD_COLUMN_NAME: [30.108, 30.274, 30.184, 29.230]
 }
 
 def prepare_arabic_text(text):
@@ -37,59 +45,76 @@ def prepare_arabic_text(text):
     except Exception:
         return str(text)
 
-@st.cache_data(ttl=3600)
+# --- FINAL AUTOMATED FUNCTION v12: Surgical Scraping with User's XPaths ---
 def fetch_data_from_cbe():
     """
-    Fetches T-Bill auction results from the CBE website.
-    This function is cached for 1 hour to avoid excessive requests.
-    Returns a status code along with the data and message.
+    Fetches T-Bill auction results using Selenium with a surgical approach,
+    extracting headers from one table and data from another using the exact
+    XPaths provided by the user.
     """
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
+    print("INFO: Initializing Selenium WebDriver...")
+    options = Options()
+    options.add_argument("--headless")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    
+    gecko_path = '/home/qatari/.cache/selenium/geckodriver/linux64/0.36.0/geckodriver'
+    
+    if not os.access(gecko_path, os.X_OK):
+        msg = f"Geckodriver is not executable at {gecko_path}. Please run 'sudo chmod +x {gecko_path}' in your terminal."
+        return None, 'PERMISSION_ERROR', msg, None
+
+    service = Service(executable_path=gecko_path)
+    driver = None
     try:
-        print("INFO: Attempting to fetch data directly from CBE source...")
-        response = requests.get(CBE_DATA_URL, headers=headers, timeout=20)
-        response.raise_for_status()
+        driver = webdriver.Firefox(service=service, options=options)
+        print(f"INFO: Navigating to {CBE_DATA_URL}")
+        driver.get(CBE_DATA_URL)
+
+        # --- Define XPaths provided by the user ---
+        header_table_xpath = "/html/body/div[1]/section[3]/div[2]/div[2]/table"
+        results_row_xpath = "/html/body/div[1]/section[3]/div[4]/div[2]/table/tbody/tr[5]"
         
-        page_source = response.text
-        soup = BeautifulSoup(page_source, 'html.parser')
+        print("INFO: Waiting for page elements to load...")
+        wait = WebDriverWait(driver, 30)
+        wait.until(EC.presence_of_element_located((By.XPATH, header_table_xpath)))
+        wait.until(EC.presence_of_element_located((By.XPATH, results_row_xpath)))
         
-        results_headers = soup.find_all('h2', string=lambda text: text and 'النتائج' in text)
-        if not results_headers:
-            msg = "لم يتم العثور على قسم 'النتائج' في صفحة البنك المركزي. قد يكون التصميم قد تغير."
+        # --- 1. Extract Headers ---
+        print("INFO: Extracting headers from header table...")
+        header_table_element = driver.find_element(By.XPATH, header_table_xpath)
+        header_html = header_table_element.get_attribute('outerHTML')
+        header_df = pd.read_html(StringIO(header_html), header=0)[0]
+        tenors_raw = header_df.columns[1:].tolist() # Get all column names except the first one
+
+        # --- 2. Extract Data ---
+        print("INFO: Extracting data from results table...")
+        results_table_element = driver.find_element(By.XPATH, results_row_xpath + "/ancestor::table")
+        results_html = results_table_element.get_attribute('outerHTML')
+        results_df = pd.read_html(StringIO(results_html))[0]
+
+        search_phrase = "متوسط العائد المرجح"
+        yield_row_df = results_df[results_df.iloc[:, 0].astype(str).str.contains(search_phrase, na=False)]
+        
+        if yield_row_df.empty:
+            msg = f"تم العثور على الجداول، ولكن لم يتم العثور على صف '{search_phrase}'."
+            return None, 'NO_DATA_FOUND', msg, None
+
+        yields = yield_row_df.iloc[0, 1:].values
+
+        # --- 3. Combine and Process ---
+        if len(tenors_raw) != len(yields):
+            msg = "عدد الآجال لا يتطابق مع عدد العوائد. تغير هيكل الموقع."
             return None, 'STRUCTURE_CHANGED', msg, None
 
-        next_tables = results_headers[-1].find_all_next('table')
-        if not next_tables:
-            msg = "تم العثور على قسم النتائج ولكن لم يتم العثور على أي جدول بعده."
-            return None, 'STRUCTURE_CHANGED', msg, None
-
-        results_table_df = pd.read_html(StringIO(str(next_tables[0])))[0]
+        final_df = pd.DataFrame({
+            'RawTenor': tenors_raw,
+            YIELD_COLUMN_NAME: yields
+        })
         
-        accepted_yield_rows = results_table_df[results_table_df.iloc[:, 0].astype(str).str.contains("متوسط العائد المرجح المقبول", na=False)]
-
-        if not accepted_yield_rows.empty:
-            yield_row = accepted_yield_rows.iloc[-1]
-        else:
-            all_yield_rows = results_table_df[results_table_df.iloc[:, 0].astype(str).str.contains("متوسط العائد المرجح", na=False)]
-            if not all_yield_rows.empty:
-                yield_row = all_yield_rows.iloc[-1]
-            else:
-                msg = "لا توجد نتائج عطاءات جديدة متاحة حالياً."
-                return None, 'NO_DATA_FOUND', msg, None
+        final_df[TENOR_COLUMN_NAME] = final_df['RawTenor'].astype(str).str.extract(r'(\d+)', expand=False)
+        final_df = final_df.drop(columns=['RawTenor'])
         
-        yield_data_df = pd.DataFrame(yield_row).T
-        yield_data_df.columns = results_table_df.columns
-        yield_data_df.rename(columns={yield_data_df.columns[0]: 'البيان'}, inplace=True)
-        
-        melt_vars = [col for col in yield_data_df.columns if col != 'البيان']
-        df_unpivoted = pd.melt(yield_data_df, id_vars=['البيان'], value_vars=melt_vars, var_name=TENOR_COLUMN_NAME, value_name='القيمة')
-        
-        df_unpivoted.rename(columns={'القيمة': YIELD_COLUMN_NAME}, inplace=True)
-        final_df = df_unpivoted[[TENOR_COLUMN_NAME, YIELD_COLUMN_NAME]]
-        
-        final_df[TENOR_COLUMN_NAME] = final_df[TENOR_COLUMN_NAME].astype(str).str.extract(r'(\d+)', expand=False)
         final_df = final_df.dropna().copy()
         final_df[YIELD_COLUMN_NAME] = pd.to_numeric(final_df[YIELD_COLUMN_NAME], errors='coerce')
         final_df[TENOR_COLUMN_NAME] = pd.to_numeric(final_df[TENOR_COLUMN_NAME], errors='coerce')
@@ -98,18 +123,23 @@ def fetch_data_from_cbe():
         if not final_df.empty:
             final_df[TENOR_COLUMN_NAME] = final_df[TENOR_COLUMN_NAME].astype(int)
             final_df.sort_values(TENOR_COLUMN_NAME, inplace=True)
+            final_df.rename(columns={YIELD_COLUMN_NAME: "متوسط العائد المرجح المقبول (%)"}, inplace=True)
+            
+            # --- 4. Save new CSV file ---
             final_df.to_csv(CSV_FILENAME, index=False, encoding='utf-8-sig')
+            print(f"INFO: Successfully created new data file: {CSV_FILENAME}")
             return final_df, 'SUCCESS', "تم تحديث البيانات بنجاح!", datetime.now().strftime("%Y-%m-%d")
             
         return None, 'NO_DATA_FOUND', "لم يتم العثور على بيانات صالحة بعد المعالجة.", None
 
-    except requests.exceptions.RequestException as e:
-        msg = f"فشل الاتصال بموقع البنك المركزي. ({e})"
-        return None, 'REQUEST_ERROR', msg, None
     except Exception as e:
         traceback.print_exc()
-        msg = f"خطأ غير متوقع أثناء تحليل البيانات: {e}"
-        return None, 'UNEXPECTED_ERROR', msg, None
+        msg = f"خطأ غير متوقع أثناء التشغيل الآلي: {e}"
+        return None, 'SELENIUM_ERROR', msg, None
+    finally:
+        if driver:
+            print("INFO: Closing Selenium WebDriver.")
+            driver.quit()
 
 # --- 3. Streamlit App Layout (Aesthetic UI) ---
 st.set_page_config(layout="wide", page_title="حاسبة أذون الخزانة", page_icon="🏦")
@@ -123,51 +153,42 @@ st.markdown("""
         direction: rtl !important;
         text-align: right !important;
         font-family: 'Cairo', sans-serif !important;
-        box-sizing: border-box; /* Prevent padding from breaking layout */
+        box-sizing: border-box;
     }
     h1, h2, h3, h4, h5, h6 { font-weight: 700 !important; }
     
-    /* Main app background */
     .main > div {
-        background-color: #f0f2f6; /* Light gray background */
+        background-color: #f0f2f6;
     }
 
-    /* --- DARK THEME FOR ALL CARDS --- */
     .st-emotion-cache-1r6slb0 {
         box-shadow: 0 4px 12px 0 rgba(0,0,0,0.1) !important;
         border-radius: 15px !important;
         border: 1px solid #495057 !important;
         padding: 25px !important;
         height: 100%;
-        background-color: #343a40 !important; /* Dark background */
-        color: #f8f9fa !important; /* Light text */
-    }
-    .st-emotion-cache-1r6slb0:hover {
-        box-shadow: 0 8px 24px 0 rgba(0,0,0,0.2) !important;
-    }
-
-    /* Text and header colors within dark cards */
-    .st-emotion-cache-1r6slb0 h1, .st-emotion-cache-1r6slb0 h2, .st-emotion-cache-1r6slb0 h3, .st-emotion-cache-1r6slb0 h4, .st-emotion-cache-1r6slb0 p, .st-emotion-cache-1r6slb0 span, .st-emotion-cache-1r6slb0 li, .st-emotion-cache-1r6slb0 div, .st-emotion-cache-1r6slb0 label {
+        background-color: #343a40 !important;
         color: #f8f9fa !important;
     }
-    
-    /* Input field label color */
-    .st-emotion-cache-1r6slb0 .st-emotion-cache-ue6h4q {
-        color: #dee2e6 !important;
-    }
 
-    /* Metric styling for dark cards */
-    .st-emotion-cache-1r6slb0 div[data-testid="stMetricValue"] { color: #f8f9fa !important; font-size: 1.75rem !important; }
-    .st-emotion-cache-1r6slb0 div[data-testid="stMetricLabel"] { color: #adb5bd !important; }
-    
-    /* Button styling */
-    .st-emotion-cache-19rxjzo {
-        border-radius: 10px !important; font-weight: 700 !important;
-        box-shadow: 0 2px 4px 0 rgba(0,0,0,0.1) !important;
-        padding: 0.75rem 1rem !important; font-size: 1.05rem !important;
+    div[data-testid="stMetric"] {
+        text-align: center;
+    }
+    div[data-testid="stMetricValue"] { 
+        color: #f8f9fa !important; 
+        font-size: 1.15rem !important;
+        padding: 0 !important;
+        margin: 0 !important;
+    }
+    div[data-testid="stMetricLabel"] { 
+        color: #adb5bd !important;
+        font-size: 0.75rem !important;
+        white-space: normal; 
+        word-wrap: break-word;
+        padding: 0 !important;
+        margin-top: 5px !important;
     }
     
-    /* Title styling - Dark card for header */
     .app-title { 
         text-align: center !important; 
         padding: 1.5rem 1rem;
@@ -176,13 +197,8 @@ st.markdown("""
         margin-bottom: 1rem;
         box-shadow: 0 4px 12px 0 rgba(0,0,0,0.1) !important;
     }
-    .app-title h1 {
-        color: #ffffff !important;
-    }
-    .app-title p {
-        color: #dee2e6 !important; /* Lighter color for subtitle */
-    }
-    
+    .app-title h1 { color: #ffffff !important; }
+    .app-title p { color: #dee2e6 !important; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -194,6 +210,9 @@ st.markdown(f"""
     <p>{prepare_arabic_text("تطبيق تفاعلي لحساب وتحليل عوائد أذون الخزانة")}</p>
 </div>
 """, unsafe_allow_html=True)
+
+# Re-define the original column name for display purposes
+YIELD_COLUMN_NAME = "متوسط العائد المرجح المقبول (%)"
 
 # Initialize session state
 if 'df_data' not in st.session_state:
@@ -216,9 +235,9 @@ top_col1, top_col2 = st.columns(2, gap="large")
 with top_col1:
     with st.container(border=True):
         st.subheader(prepare_arabic_text("📊 أحدث العوائد المعتمدة"), anchor=False)
-        if not data_df.empty:
+        if not data_df.empty and TENOR_COLUMN_NAME in data_df.columns and YIELD_COLUMN_NAME in data_df.columns:
             sorted_tenors = sorted(data_df[TENOR_COLUMN_NAME].unique())
-            cols = st.columns(len(sorted_tenors))
+            cols = st.columns(len(sorted_tenors) if sorted_tenors else 1)
             tenor_icons = {91: "⏳", 182: "🗓️", 273: "📆", 364: "🗓️✨"}
             for i, tenor in enumerate(sorted_tenors):
                 with cols[i]:
@@ -226,8 +245,9 @@ with top_col1:
                     rate = data_df[data_df[TENOR_COLUMN_NAME] == tenor][YIELD_COLUMN_NAME].iloc[0]
                     st.metric(label=prepare_arabic_text(f"{icon} أجل {tenor} يوم"), value=f"{rate:.3f}%")
         else:
-            st.warning(prepare_arabic_text("لم يتم تحميل البيانات."))
+            st.warning(prepare_arabic_text("لم يتم تحميل البيانات أو أن البيانات غير مكتملة."))
 
+# --- Restored Automated UI ---
 with top_col2:
     with st.container(border=True):
         st.subheader(prepare_arabic_text("📡 حالة الاتصال بالبنك المركزي"), anchor=False)
@@ -244,15 +264,15 @@ with top_col2:
         c1, c2 = st.columns(2)
         with c1:
             if st.button(prepare_arabic_text("🔄 جلب أحدث البيانات"), use_container_width=True, type="primary"):
-                with st.spinner(prepare_arabic_text("جاري الاتصال بالبنك المركزي...")):
+                with st.spinner(prepare_arabic_text("جاري تشغيل المتصفح لجلب البيانات...")):
                     new_df, status, message, update_time = fetch_data_from_cbe()
                     if status == 'SUCCESS':
-                        st.session_state.df_data = new_df; st.session_state.last_update = datetime.now(cairo_tz).strftime("%d-%m-%Y %H:%M")
-                        st.success(prepare_arabic_text("✅ تم التحديث بنجاح!"), icon="✅"); time.sleep(2); st.rerun()
-                    elif status == 'NO_DATA_FOUND':
-                        st.info(prepare_arabic_text("ℹ️ لا توجد نتائج جديدة."), icon="ℹ️"); time.sleep(3)
+                        st.session_state.df_data = new_df
+                        st.session_state.last_update = datetime.now(cairo_tz).strftime("%d-%m-%Y %H:%M")
+                        st.toast(prepare_arabic_text("✅ تم التحديث بنجاح!"), icon="✅")
+                        st.rerun() 
                     else:
-                        st.error(prepare_arabic_text(f"⚠️ {message}"), icon="⚠️"); time.sleep(4)
+                        st.error(prepare_arabic_text(f"⚠️ {message}"), icon="⚠️")
         with c2:
             st.link_button(prepare_arabic_text("🔗 فتح موقع البنك"), CBE_DATA_URL, use_container_width=True)
 
@@ -267,14 +287,21 @@ with col_form_main:
     with st.container(border=True):
         st.subheader(prepare_arabic_text("1. أدخل بيانات الاستثمار"), anchor=False)
         investment_amount_main = st.number_input(prepare_arabic_text("المبلغ المستثمر (بالجنيه)"), min_value=1000.0, value=100000.0, step=1000.0, key="main_investment")
-        selected_tenor_main = st.selectbox(prepare_arabic_text("اختر مدة الاستحقاق (بالأيام)"), options=data_df[TENOR_COLUMN_NAME].unique(), key="main_tenor")
+        
+        if TENOR_COLUMN_NAME in data_df.columns and not data_df[TENOR_COLUMN_NAME].empty:
+            options = sorted(data_df[TENOR_COLUMN_NAME].unique())
+            selected_tenor_main = st.selectbox(prepare_arabic_text("اختر مدة الاستحقاق (بالأيام)"), options=options, key="main_tenor")
+        else:
+            selected_tenor_main = st.selectbox(prepare_arabic_text("اختر مدة الاستحقاق (بالأيام)"), options=[91, 182, 273, 364], key="main_tenor")
+            st.warning("لم يتم تحميل الآجال، يتم استخدام القيم الافتراضية.")
+
         st.subheader(prepare_arabic_text("2. قم بحساب العائد"), anchor=False)
         calculate_button_main = st.button(prepare_arabic_text("احسب العائد الآن"), use_container_width=True, type="primary", key="main_calc")
 
 results_placeholder_main = col_results_main.empty()
 
 if calculate_button_main:
-    if not data_df.empty:
+    if not data_df.empty and TENOR_COLUMN_NAME in data_df.columns and YIELD_COLUMN_NAME in data_df.columns:
         yield_rate_row = data_df[data_df[TENOR_COLUMN_NAME] == selected_tenor_main]
         if not yield_rate_row.empty:
             yield_rate = yield_rate_row[YIELD_COLUMN_NAME].iloc[0]
@@ -291,7 +318,6 @@ if calculate_button_main:
                 st.markdown(f'<table style="width:100%; font-size: 1.0rem;"><tr><td style="padding-bottom: 8px;">{prepare_arabic_text("💰 المبلغ المستثمر")}</td><td style="text-align:left;">{investment_amount_main:,.2f} {prepare_arabic_text("جنيه")}</td></tr><tr><td style="padding-bottom: 8px; color: #8ab4f8;">{prepare_arabic_text("📈 العائد الإجمالي")}</td><td style="text-align:left; color: #8ab4f8;">{gross_return:,.2f} {prepare_arabic_text("جنيه")}</td></tr><tr><td style="padding-bottom: 15px; color: #f28b82;">{prepare_arabic_text("💸 ضريبة الأرباح (20%)")}</td><td style="text-align:left; color: #f28b82;">- {tax_amount:,.2f} {prepare_arabic_text("جنيه")}</td></tr></table>', unsafe_allow_html=True)
                 st.markdown(f'<div style="background-color: #495057; padding: 10px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center;"><span style="font-size: 1.1rem;">{prepare_arabic_text("🏦 إجمالي المستلم")}</span><span style="font-size: 1.2rem;">{total_payout:,.2f} {prepare_arabic_text("جنيه")}</span></div>', unsafe_allow_html=True)
                 
-                # --- Comparison Section Restored ---
                 st.markdown('<hr style="border-color: #495057;">', unsafe_allow_html=True)
                 st.markdown(f"<h6 style='text-align:center; color:#dee2e6;'>{prepare_arabic_text('مقارنة سريعة مع الآجال الأخرى')}</h6>", unsafe_allow_html=True)
                 
@@ -322,8 +348,13 @@ with col_secondary_form:
         st.subheader(prepare_arabic_text("1. أدخل بيانات الإذن الأصلي"), anchor=False)
         face_value_secondary = st.number_input(prepare_arabic_text("القيمة الإسمية للإذن"), min_value=1000.0, value=100000.0, step=1000.0, key="secondary_face_value")
         original_yield_secondary = st.number_input(prepare_arabic_text("عائد الشراء الأصلي (%)"), min_value=1.0, value=29.0, step=0.1, key="secondary_original_yield", format="%.3f")
-        original_tenor_secondary = st.selectbox(prepare_arabic_text("أجل الإذن الأصلي (بالأيام)"), options=data_df[TENOR_COLUMN_NAME].unique(), key="secondary_tenor", index=0)
         
+        if TENOR_COLUMN_NAME in data_df.columns and not data_df[TENOR_COLUMN_NAME].empty:
+            options = sorted(data_df[TENOR_COLUMN_NAME].unique())
+            original_tenor_secondary = st.selectbox(prepare_arabic_text("أجل الإذن الأصلي (بالأيام)"), options=options, key="secondary_tenor", index=0)
+        else:
+            original_tenor_secondary = st.selectbox(prepare_arabic_text("أجل الإذن الأصلي (بالأيام)"), options=[91, 182, 273, 364], key="secondary_tenor", index=0)
+
         st.subheader(prepare_arabic_text("2. أدخل تفاصيل البيع"), anchor=False)
         early_sale_days_secondary = st.number_input(
             prepare_arabic_text("أيام الاحتفاظ الفعلية (قبل البيع)"),
@@ -343,7 +374,6 @@ with col_secondary_form:
 secondary_results_placeholder = col_secondary_results.empty()
 
 if calc_secondary_sale_button:
-    # Calculations
     original_purchase_price = face_value_secondary / (1 + (original_yield_secondary / 100 * original_tenor_secondary / 365))
     remaining_days = original_tenor_secondary - early_sale_days_secondary
     
@@ -352,27 +382,22 @@ if calc_secondary_sale_button:
     else:
         sale_price = face_value_secondary / (1 + (secondary_market_yield / 100 * remaining_days / 365))
         gross_profit = sale_price - original_purchase_price
-        tax_amount_secondary = max(0, gross_profit * 0.20) # Tax is only on profit
+        tax_amount_secondary = max(0, gross_profit * 0.20)
         net_profit = gross_profit - tax_amount_secondary
         annualized_yield_secondary = (net_profit / original_purchase_price) * (365 / early_sale_days_secondary) * 100 if early_sale_days_secondary > 0 else 0
         
         gross_return_full = face_value_secondary - original_purchase_price
-        net_return_full = gross_return_full * 0.80 # 20% tax on full profit
+        net_return_full = gross_return_full * 0.80
         cost_of_liquidity = net_return_full - net_profit
         percentage_lost = (cost_of_liquidity / net_return_full) * 100 if net_return_full > 0 else 0
 
-
         with secondary_results_placeholder.container(border=True):
             st.subheader(prepare_arabic_text("✨ تحليل سعر البيع الثانوي"), anchor=False)
-            
             c1, c2 = st.columns(2)
             c1.metric(label=prepare_arabic_text("🏷️ سعر البيع الفعلي للإذن"), value=f"{sale_price:,.2f} جنيه")
             c2.metric(label=prepare_arabic_text("💰 صافي الربح / الخسارة"), value=f"{net_profit:,.2f} جنيه", delta=f"{annualized_yield_secondary:.2f}% سنوياً")
-            
             st.markdown('<hr style="border-color: #495057;">', unsafe_allow_html=True)
-            
             st.markdown(f"<h6 style='text-align:center; color:#dee2e6;'>{prepare_arabic_text('تفاصيل حساب الضريبة')}</h6>", unsafe_allow_html=True)
-            
             if gross_profit > 0:
                  st.markdown(f"""
                 <table style="width:100%; font-size: 0.9rem;  text-align:center;">
@@ -390,9 +415,7 @@ if calc_secondary_sale_button:
                 """, unsafe_allow_html=True)
             else:
                  st.info(prepare_arabic_text("لا توجد ضريبة على الخسائر الرأسمالية."), icon="ℹ️")
-            
             st.markdown('<hr style="border-color: #495057;">', unsafe_allow_html=True)
-            
             st.markdown(f"""
             <div style="background-color: #593b00; color: #ffebb9; border: 1px solid #856404; text-align:center; padding: 10px; border-radius: 8px; margin-top: 15px;">
                 <h6 style="margin-bottom: 5px; color: #ffebb9;">{prepare_arabic_text("💡 ملخص القرار")}</h6>
@@ -403,43 +426,30 @@ if calc_secondary_sale_button:
                 </p>
             </div>
             """, unsafe_allow_html=True)
-
-
 else:
     with secondary_results_placeholder.container(border=True):
         st.info(prepare_arabic_text("✨ أدخل بيانات البيع في النموذج لتحليل قرارك."))
 
-# --- NEW: Help Section ---
+# --- Help Section ---
 st.divider()
 with st.expander(prepare_arabic_text("💡 شرح ومساعدة (أسئلة شائعة)")):
     st.markdown(prepare_arabic_text("""
     #### **ما الفرق بين "العائد" و "الفائدة"؟**
     - **الفائدة (Interest):** تُحسب على أصل المبلغ وتُضاف إليه دورياً (مثل شهادات الادخار).
     - **العائد (Yield):** في أذون الخزانة، أنت تشتري الإذن بسعر **أقل** من قيمته الإسمية (مثلاً تشتريه بـ 975 وهو يساوي 1000)، وربحك هو الفارق الذي ستحصل عليه في نهاية المدة. الحاسبة تحول هذا الفارق إلى نسبة مئوية سنوية لتسهيل المقارنة.
-
     ---
-    
     #### **كيف تعمل حاسبة العائد الأساسية؟**
     هذه الحاسبة تجيب على سؤال: "كم سأربح إذا احتفظت بالإذن حتى نهاية مدته؟".
     1.  **حساب إجمالي الربح:** `المبلغ المستثمر × (العائد ÷ 100) × (مدة الإذن ÷ 365)`
     2.  **حساب الضريبة:** `إجمالي الربح × 0.20`
     3.  **حساب صافي الربح:** `إجمالي الربح - قيمة الضريبة`
     4.  **إجمالي المستلم:** `المبلغ المستثمر + صافي الربح`
-
     ---
-
     #### **كيف تعمل حاسبة البيع في السوق الثانوي؟**
     هذه الحاسبة تجيب على سؤال: "كم سيكون ربحي أو خسارتي إذا بعت الإذن اليوم قبل تاريخ استحقاقه؟". سعر البيع هنا لا يعتمد على سعر شرائك، بل على سعر الفائدة **الحالي** في السوق.
-    1.  **حساب سعر شرائك الأصلي:** أولاً، نحسب المبلغ الذي دفعته فعلياً عند الشراء.
-        - `سعر الشراء = القيمة الإسمية ÷ (1 + (عائد الشراء ÷ 100) × (الأجل الأصلي ÷ 365))`
-    2.  **حساب سعر البيع اليوم:** نحسب السعر الذي سيشتريه به شخص آخر اليوم بناءً على الفائدة الحالية.
-        - `الأيام المتبقية = الأجل الأصلي - أيام الاحتفاظ`
-        - `سعر البيع = القيمة الإسمية ÷ (1 + (العائد السائد ÷ 100) × (الأيام المتبقية ÷ 365))`
-    3.  **النتيجة النهائية:**
-        - `الربح أو الخسارة = سعر البيع - سعر الشراء الأصلي`
-        - يتم حساب الضريبة (20%) على هذا الربح إذا كان موجباً.
-
+    1.  **حساب سعر شرائك الأصلي:** `سعر الشراء = القيمة الإسمية ÷ (1 + (عائد الشراء ÷ 100) × (الأجل الأصلي ÷ 365))`
+    2.  **حساب سعر البيع اليوم:** `الأيام المتبقية = الأجل الأصلي - أيام الاحتفاظ`، `سعر البيع = القيمة الإسمية ÷ (1 + (العائد السائد ÷ 100) × (الأيام المتبقية ÷ 365))`
+    3.  **النتيجة النهائية:** `الربح أو الخسارة = سعر البيع - سعر الشراء الأصلي`. يتم حساب الضريبة (20%) على هذا الربح إذا كان موجباً.
     ---
     ***إخلاء مسؤولية:*** *هذا التطبيق هو أداة استرشادية فقط، والأرقام الناتجة هي تقديرات. للحصول على أرقام نهائية ودقيقة، يرجى الرجوع إلى البنك أو المؤسسة المالية التي تتعامل معها.*
     """))
-

@@ -1,1 +1,1 @@
-libfribidi-dev
+firefox-geckodriver

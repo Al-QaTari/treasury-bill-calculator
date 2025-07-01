@@ -45,73 +45,73 @@ def prepare_arabic_text(text):
     except Exception:
         return str(text)
 
-# --- FINAL AUTOMATED FUNCTION v12: Surgical Scraping with User's XPaths ---
+# --- FINAL DEPLOYMENT FUNCTION: Universal Driver Path ---
 def fetch_data_from_cbe():
     """
-    Fetches T-Bill auction results using Selenium with a surgical approach,
-    extracting headers from one table and data from another using the exact
-    XPaths provided by the user.
+    Fetches T-Bill auction results using Selenium. This version removes all
+    hardcoded local paths to work universally on any system, including
+    Streamlit Community Cloud.
     """
-    print("INFO: Initializing Selenium WebDriver...")
+    print("INFO: Initializing Selenium WebDriver for deployment...")
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     
-    gecko_path = '/home/qatari/.cache/selenium/geckodriver/linux64/0.36.0/geckodriver'
-    
-    if not os.access(gecko_path, os.X_OK):
-        msg = f"Geckodriver is not executable at {gecko_path}. Please run 'sudo chmod +x {gecko_path}' in your terminal."
-        return None, 'PERMISSION_ERROR', msg, None
-
-    service = Service(executable_path=gecko_path)
     driver = None
     try:
-        driver = webdriver.Firefox(service=service, options=options)
+        # Selenium will automatically find the geckodriver installed by packages.txt
+        driver = webdriver.Firefox(options=options)
+        
         print(f"INFO: Navigating to {CBE_DATA_URL}")
         driver.get(CBE_DATA_URL)
 
-        # --- Define XPaths provided by the user ---
-        header_table_xpath = "/html/body/div[1]/section[3]/div[2]/div[2]/table"
-        results_row_xpath = "/html/body/div[1]/section[3]/div[4]/div[2]/table/tbody/tr[5]"
-        
-        print("INFO: Waiting for page elements to load...")
+        # Wait for the table header to ensure the correct table is loaded
+        header_xpath = "//table/thead"
+        print(f"INFO: Waiting for table header with XPath '{header_xpath}' to load...")
         wait = WebDriverWait(driver, 30)
-        wait.until(EC.presence_of_element_located((By.XPATH, header_table_xpath)))
-        wait.until(EC.presence_of_element_located((By.XPATH, results_row_xpath)))
+        wait.until(EC.presence_of_element_located((By.XPATH, header_xpath)))
         
-        # --- 1. Extract Headers ---
-        print("INFO: Extracting headers from header table...")
-        header_table_element = driver.find_element(By.XPATH, header_table_xpath)
-        header_html = header_table_element.get_attribute('outerHTML')
-        header_df = pd.read_html(StringIO(header_html), header=0)[0]
-        tenors_raw = header_df.columns[1:].tolist() # Get all column names except the first one
+        print("INFO: Table header found. Getting page source...")
+        page_source = driver.page_source
+        soup = BeautifulSoup(page_source, 'html.parser')
 
-        # --- 2. Extract Data ---
-        print("INFO: Extracting data from results table...")
-        results_table_element = driver.find_element(By.XPATH, results_row_xpath + "/ancestor::table")
-        results_html = results_table_element.get_attribute('outerHTML')
-        results_df = pd.read_html(StringIO(results_html))[0]
-
-        search_phrase = "متوسط العائد المرجح"
-        yield_row_df = results_df[results_df.iloc[:, 0].astype(str).str.contains(search_phrase, na=False)]
+        # Find the specific table that has a <thead> tag
+        all_tables = soup.find_all('table')
+        correct_table_html = None
+        for table in all_tables:
+            if table.find('thead'):
+                correct_table_html = str(table)
+                print("INFO: Found the correct data table with a <thead>.")
+                break
         
-        if yield_row_df.empty:
-            msg = f"تم العثور على الجداول، ولكن لم يتم العثور على صف '{search_phrase}'."
-            return None, 'NO_DATA_FOUND', msg, None
-
-        yields = yield_row_df.iloc[0, 1:].values
-
-        # --- 3. Combine and Process ---
-        if len(tenors_raw) != len(yields):
-            msg = "عدد الآجال لا يتطابق مع عدد العوائد. تغير هيكل الموقع."
+        if not correct_table_html:
+            msg = "لم يتم العثور على جدول النتائج الصحيح."
             return None, 'STRUCTURE_CHANGED', msg, None
 
-        final_df = pd.DataFrame({
-            'RawTenor': tenors_raw,
-            YIELD_COLUMN_NAME: yields
-        })
+        # Let pandas parse the correct table, using the first row as the header
+        results_table_df = pd.read_html(StringIO(correct_table_html), header=0)[0]
+
+        # Find the data row by searching for the key phrase
+        search_phrase = "متوسط العائد المرجح"
+        yield_row_df = results_table_df[results_table_df.iloc[:, 0].astype(str).str.contains(search_phrase, na=False)]
         
+        if yield_row_df.empty:
+            msg = f"تم العثور على الجدول، ولكن لم يتم العثور على صف '{search_phrase}'."
+            return None, 'NO_DATA_FOUND', msg, None
+
+        # Unpivot the found row to create the final DataFrame
+        id_vars = results_table_df.columns[0]
+        value_vars = results_table_df.columns[1:]
+        
+        melted_df = yield_row_df.melt(
+            id_vars=[id_vars],
+            value_vars=value_vars,
+            var_name='RawTenor',
+            value_name=YIELD_COLUMN_NAME
+        )
+        
+        final_df = melted_df[['RawTenor', YIELD_COLUMN_NAME]].copy()
         final_df[TENOR_COLUMN_NAME] = final_df['RawTenor'].astype(str).str.extract(r'(\d+)', expand=False)
         final_df = final_df.drop(columns=['RawTenor'])
         
@@ -125,9 +125,8 @@ def fetch_data_from_cbe():
             final_df.sort_values(TENOR_COLUMN_NAME, inplace=True)
             final_df.rename(columns={YIELD_COLUMN_NAME: "متوسط العائد المرجح المقبول (%)"}, inplace=True)
             
-            # --- 4. Save new CSV file ---
             final_df.to_csv(CSV_FILENAME, index=False, encoding='utf-8-sig')
-            print(f"INFO: Successfully created new data file: {CSV_FILENAME}")
+            print(f"INFO: Successfully processed data. (File will be saved in the cloud environment)")
             return final_df, 'SUCCESS', "تم تحديث البيانات بنجاح!", datetime.now().strftime("%Y-%m-%d")
             
         return None, 'NO_DATA_FOUND', "لم يتم العثور على بيانات صالحة بعد المعالجة.", None

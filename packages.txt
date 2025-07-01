@@ -1,1 +1,1 @@
-firefox-geckodriver
+firefox-esr
